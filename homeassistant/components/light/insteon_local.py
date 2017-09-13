@@ -11,7 +11,6 @@ from datetime import timedelta
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, Light)
-from homeassistant.loader import get_component
 import homeassistant.util as util
 
 _CONFIGURING = {}
@@ -33,26 +32,28 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     insteonhub = hass.data['insteon_local']
 
     conf_lights = config_from_file(hass.config.path(INSTEON_LOCAL_LIGHTS_CONF))
-    if len(conf_lights):
+    if conf_lights:
         for device_id in conf_lights:
             setup_light(device_id, conf_lights[device_id], insteonhub, hass,
                         add_devices)
 
-    linked = insteonhub.get_linked()
+    else:
+        linked = insteonhub.get_linked()
 
-    for device_id in linked:
-        if (linked[device_id]['cat_type'] == 'dimmer' and
-                device_id not in conf_lights):
-            request_configuration(device_id,
-                                  insteonhub,
-                                  linked[device_id]['model_name'] + ' ' +
-                                  linked[device_id]['sku'], hass, add_devices)
+        for device_id in linked:
+            if (linked[device_id]['cat_type'] == 'dimmer' and
+                    device_id not in conf_lights):
+                request_configuration(device_id,
+                                      insteonhub,
+                                      linked[device_id]['model_name'] + ' ' +
+                                      linked[device_id]['sku'],
+                                      hass, add_devices)
 
 
 def request_configuration(device_id, insteonhub, model, hass,
                           add_devices_callback):
     """Request configuration steps from the user."""
-    configurator = get_component('configurator')
+    configurator = hass.components.configurator
 
     # We got an error if this method is called while we are configuring
     if device_id in _CONFIGURING:
@@ -62,12 +63,12 @@ def request_configuration(device_id, insteonhub, model, hass,
         return
 
     def insteon_light_config_callback(data):
-        """The actions to do when our configuration callback is called."""
+        """Set up actions to do when our configuration callback is called."""
         setup_light(device_id, data.get('name'), insteonhub, hass,
                     add_devices_callback)
 
     _CONFIGURING[device_id] = configurator.request_config(
-        hass, 'Insteon  ' + model + ' addr: ' + device_id,
+        'Insteon  ' + model + ' addr: ' + device_id,
         insteon_light_config_callback,
         description=('Enter a name for ' + model + ' addr: ' + device_id),
         entity_picture='/static/images/config_insteon.png',
@@ -80,9 +81,9 @@ def setup_light(device_id, name, insteonhub, hass, add_devices_callback):
     """Set up the light."""
     if device_id in _CONFIGURING:
         request_id = _CONFIGURING.pop(device_id)
-        configurator = get_component('configurator')
+        configurator = hass.components.configurator
         configurator.request_done(request_id)
-        _LOGGER.info("Device configuration done!")
+        _LOGGER.debug("Device configuration done")
 
     conf_lights = config_from_file(hass.config.path(INSTEON_LOCAL_LIGHTS_CONF))
     if device_id not in conf_lights:
@@ -105,7 +106,7 @@ def config_from_file(filename, config=None):
             with open(filename, 'w') as fdesc:
                 fdesc.write(json.dumps(config))
         except IOError as error:
-            _LOGGER.error('Saving config file failed: %s', error)
+            _LOGGER.error("Saving config file failed: %s", error)
             return False
         return True
     else:
@@ -150,6 +151,10 @@ class InsteonLocalDimmerDevice(Light):
     def update(self):
         """Update state of the light."""
         resp = self.node.status(0)
+
+        while 'error' in resp and resp['error'] is True:
+            resp = self.node.status(0)
+
         if 'cmd2' in resp:
             self._value = int(resp['cmd2'], 16)
 
@@ -169,7 +174,7 @@ class InsteonLocalDimmerDevice(Light):
         if ATTR_BRIGHTNESS in kwargs:
             brightness = int(kwargs[ATTR_BRIGHTNESS]) / 255 * 100
 
-        self.node.on(brightness)
+        self.node.change_level(brightness)
 
     def turn_off(self, **kwargs):
         """Turn device off."""
